@@ -3,6 +3,9 @@ from .state import GameContext
 from .command import GameCommand, GameCommandGroup
 
 from typing import Concatenate, Any
+
+from discord import ApplicationContext
+
 import discord
 
 class JLOXBot[S: GameContext](discord.Bot):
@@ -12,10 +15,12 @@ class JLOXBot[S: GameContext](discord.Bot):
         self.ctx_cls = ctx_cls
         self.games: dict[int, S] = {}
 
-        self.create_setup_command()
+        self.setup_command()
+        self.settings_command()
+        self.end_command()
     
     def game_command(self, **kwargs: Any):
-        def decorator(func: AsyncCallable[Concatenate[discord.ApplicationContext, S, ...], None]): # pyright: ignore[reportUnknownParameterType]
+        def decorator(func: AsyncCallable[Concatenate[ApplicationContext, S, ...], None]): # pyright: ignore[reportUnknownParameterType]
             return self.application_command(cls=GameCommand, getGameCtx=self.getGameCtx, **kwargs)(func) # pyright: ignore[reportUnknownVariableType, reportUnknownMemberType] 
         return decorator
 
@@ -28,18 +33,38 @@ class JLOXBot[S: GameContext](discord.Bot):
     def getGameCtx(self, channel_id: int) -> S:
         return self.games[channel_id]
     
-    def create_setup_command(self): # pyright: ignore[reportUnknownParameterType]
+
+    # GLOBAL GAME COMMANDS
+    
+    def setup_command(self):
         @self.command() # pyright: ignore[reportUnknownMemberType]
-        async def setup(dctx: discord.ApplicationContext) -> None: # pyright: ignore[reportUnusedFunction]
+        async def setup(dctx: ApplicationContext) -> None: # pyright: ignore[reportUnusedFunction]
             """Create and set up a new game!"""
             if isinstance(dctx.channel, discord.Thread):
                 await dctx.respond("Cannot create a game from a thread!", ephemeral=True)
                 return
-                
+            
             gctx = self.ctx_cls(f"Game {len(self.games) + 1}")
-            if await gctx.setup(dctx):
+            if await gctx.setup(dctx, True):
                 channel: discord.TextChannel = dctx.channel
                 thread = await channel.create_thread(name=gctx.name, type=discord.ChannelType.public_thread)
                 self.games[thread.id] = gctx
 
                 await dctx.respond(f"Created a new game in {thread.mention}!")
+    
+    def settings_command(self):
+        @self.game_command()
+        async def settings(dctx: ApplicationContext, gctx: S): # pyright: ignore[reportUnusedFunction]
+            """Change the settings of the current game."""
+            await gctx.setup(dctx, False)
+
+    def end_command(self):
+        @self.game_command()
+        async def end(dctx: ApplicationContext, gctx: S, delete: bool = True):
+            """End the current game."""
+            if dctx.channel_id in self.games.keys():
+                del self.games[dctx.channel_id]
+                if delete:
+                    await dctx.channel.delete()
+            else:
+                await dctx.respond("No game found in this channel!", ephemeral=True)

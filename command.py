@@ -59,6 +59,3 @@ class GameCommandGroup[S](SlashCommandGroup):
         )
         self.subcommands.append(sub_command_group)
         return sub_command_group
-    
-    def hello(self):
-        print("hi")
