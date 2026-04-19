@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 from discord import ApplicationContext
 from enum import Enum
+from typing import List
 
 Status = Enum("Status", "SETUP RUNNING PAUSED END")
     
@@ -9,6 +10,7 @@ class GameContext(ABC):
         super().__init__()
         self.name = name
         self.status = Status.SETUP
+        self.event_log: List[GameEvent] = []
 
         self.teams = []
 
