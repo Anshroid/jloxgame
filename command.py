@@ -1,23 +1,28 @@
+from __future__ import annotations # TODO: Remove when updated to 3.14
 from discord import (
     SlashCommand, ClientException, ApplicationContext,
     SlashCommandGroup
 )
-from typing import OrderedDict, Callable, Any, Concatenate, cast
+from typing import OrderedDict, Callable, Any, Concatenate, cast, Self
 from inspect import Parameter
 
 from discord.ext.commands.cooldowns import CooldownMapping, MaxConcurrency # pyright: ignore[reportMissingTypeStubs]
 from .abc import AsyncCallable
 
 class GameCommand[S](SlashCommand):
-    def __new__(cls, *args: Any, **kwargs: Any) -> GameCommand[S]:
-        return cast(GameCommand[S], super().__new__(cls, *args, **kwargs)) # pyright: ignore[reportUnknownMemberType]
+    def __new__(cls, *args: Any, **kwargs: Any) -> Self:
+        return cast(Self, super().__new__(cls, *args, **kwargs)) # pyright: ignore[reportUnknownMemberType]
     
     def __init__(self, func: Callable[..., Any], *args: Any, getGameCtx: Callable[[int], S], **kwargs: Any) -> None:
         super().__init__(func, *args, **kwargs) # pyright: ignore[reportUnknownMemberType]
 
         async def applied(dctx: ApplicationContext, *args: Any, **kwargs: Any):
-                gctx = getGameCtx(dctx.channel_id)
-                await func(dctx, gctx, *args, **kwargs)
+                assert dctx.channel_id is not None
+                try:
+                    gctx = getGameCtx(dctx.channel_id)
+                    await func(dctx, gctx, *args, **kwargs)
+                except KeyError:
+                    await dctx.respond("No game found in this channel!")
 
         self.callback = applied
         
@@ -44,8 +49,8 @@ class GameCommandGroup[S](SlashCommandGroup):
         super().__init__(name, description, guild_ids, parent, cooldown, max_concurrency, **kwargs) # pyright: ignore[reportUnknownMemberType]
         self.getGameCtx = getGameCtx
 
-    def game_command(self, **kwargs: Any):
-        def decorator(func: AsyncCallable[Concatenate[ApplicationContext, S, ...], None]): # pyright: ignore[reportUnknownParameterType]
+    def game_command[**Ts](self, **kwargs: Any):
+        def decorator(func: AsyncCallable[Concatenate[ApplicationContext, S, Ts], None]): # pyright: ignore[reportUnknownParameterType]
             return self.command(cls=GameCommand, getGameCtx=self.getGameCtx, **kwargs)(func) # pyright: ignore[reportUnknownVariableType, reportUnknownMemberType] 
         
         return decorator
