@@ -24,7 +24,7 @@ class GameCommand[S](SlashCommand):
                 except KeyError:
                     await dctx.respond("No game found in this channel!")
 
-        self.callback = applied
+        self.callback = applied        
         
     def _check_required_params(self: SlashCommand, params: OrderedDict[str, Parameter]):
             params_iter = iter(params.items())
