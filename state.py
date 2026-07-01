@@ -3,7 +3,6 @@ from abc import ABC, abstractmethod
 from discord import ApplicationContext, User
 from enum import Enum
 from typing import Any, Self, cast
-from asyncio import Lock
 import pathlib, json, time, asyncio, random
 
 from jloxgame.events import GameEvent
@@ -11,21 +10,14 @@ from jloxgame.events import GameEvent
 Status = Enum("Status", "INIT SETUP RUNNING PAUSED END")
 
 class Team:
-    """
-    Represents a team in the game. You may subclass this if you would like.
-    Remember to call `super().__init__()`.
-
-    Warning: Objects of this class are *VOLATILE!*.
-    """
-
     def __init__(self, name: str) -> None:
         self.name = name
-        self.players: dict[int, User | None]
+        self.players: dict[int, User | None] = {}
     
     def add_user(self, user: User) -> None:
         self.players[user.id] = user
     
-    def to_dict(self) -> dict[str, Any]: return {"name": self.name, "players": self.players.keys()}
+    def to_dict(self) -> dict[str, Any]: return {"name": self.name, "players": list(self.players.keys())}
     
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Self:
@@ -34,13 +26,6 @@ class Team:
         return team
 
 class GameContext(ABC):
-    """
-    Represents the running state of a game. You should subclass this.
-    Remember to call `super().__init__()`.
-
-    Warning: Objects of this class are *VOLATILE!* Only the event log, config and player identities are saved.
-    """
-    
     registered_events: dict[str, type[GameEvent[Self]]] = {}
     @classmethod
     def event[EventType: GameEvent[Any]](cls, event: type[EventType]) -> type[EventType]:
@@ -61,13 +46,14 @@ class GameContext(ABC):
         self.name = f"Game {game_index+1}"
         
         self.status = Status.SETUP
+        
         self.thread_id = -1
+        self.has_thread = False
         
         self.init_time = time.time_ns() // 1000
         self.last_update = self.init_time
         self.pause_duration = 0
 
-        self.lock = Lock()
         self.scheduler_task: asyncio.Task[None] | None = None
         
         self.random = random.Random(self.init_time)
@@ -76,10 +62,9 @@ class GameContext(ABC):
         self.scheduled_events: list[GameEvent[Self]] = []
         self.teams: list[Team] = []
         
-        self.real = False
     
-    def realise(self, thread_id: int):
-        self.real = True
+    def assign_thread(self, thread_id: int):
+        self.has_thread = True
         self.thread_id = thread_id
         
     def game_time_now(self) -> int:
@@ -96,15 +81,15 @@ class GameContext(ABC):
 
     async def add_event(self, event: GameEvent[Self]) -> None:
         """Add an event to the event log. 
-        Note that events are added asynchronously. There is no guarantee that changes will be instant, only that the order will be correct.
+        Events are added asynchronously. There is no guarantee that changes will be instant, only that the order of events will be correct.
 
         Args:
             event (GameEvent): The event to add.
         """
-        async with self.lock:
-            event.__time__ = self.game_time_now()
-            self.event_log.append(event)
-            event.update(self, len(self.event_log)-1)
+        # note: would be a lock here
+        event.__time__ = self.game_time_now()
+        self.event_log.append(event)
+        event.update(self, len(self.event_log)-1)
     
     async def schedule_event(self, event: GameEvent[Self], h: int, m: int, s: int) -> None:
         """Schedule an event to be added to the event log.
@@ -116,18 +101,19 @@ class GameContext(ABC):
             m (int): Number of minutes in the future to schedule.
             s (int): Number of seconds in the future to schedule.
         """
-        async with self.lock:
-            event.__time__ = self.game_time_now() + ((h*60 + m)*60 + s)*1000
-            self.scheduled_events.append(event)
-            self.scheduled_events.sort(key=lambda e: e.__time__) # technically a min-heap would be better, but who cares, right?
+        # note: would be a lock here
+        event.__time__ = self.game_time_now() + ((h*60 + m)*60 + s)*1000
+        self.scheduled_events.append(event)
+        self.scheduled_events.sort(key=lambda e: e.__time__) # O(nlogn) insert :skull:
+        # technically a min-heap would be optimal, but who cares, right?
     
     async def schedule_tick(self) -> None:
         if len(self.scheduled_events) > 0:
-            async with self.lock:
-                while len(self.scheduled_events) > 0 and self.game_time_now() > self.scheduled_events[0].__time__:             
-                    event = self.scheduled_events.pop(0)
-                    self.event_log.append(event)
-                    event.update(self, len(self.event_log)-1)
+            # note: would be a lock here
+            while len(self.scheduled_events) > 0 and self.game_time_now() > self.scheduled_events[0].__time__:             
+                event = self.scheduled_events.pop(0)
+                self.event_log.append(event)
+                event.update(self, len(self.event_log)-1)
                     
         self.last_update = self.game_time_now()
     
@@ -152,18 +138,18 @@ class GameContext(ABC):
                 raise TypeError(f"Could not encode {obj} into JSON!")
 
     async def save(self, dir: pathlib.Path) -> None:
-        assert self.real
+        assert self.has_thread
         
-        async with self.lock:
-            with open(dir / f"{self.thread_id}.json", "w") as f:
-                data: dict[str, Any] = {
-                    "name": self.name,
-                    "init_time": self.init_time,
-                    "last_update": self.last_update,
-                    "teams": self.teams,
-                    "event_log": self.event_log
-                }
-                json.dump(data, f, default=self.json_encoder)
+        # note: would be a lock here
+        with open(dir / f"{self.thread_id}.json", "w") as f:
+            data: dict[str, Any] = {
+                "name": self.name,
+                "init_time": self.init_time,
+                "last_update": self.last_update,
+                "teams": self.teams,
+                "event_log": self.event_log
+            }
+            json.dump(data, f, default=self.json_encoder)
 
     @classmethod
     def load(cls, dir: pathlib.Path, thread_id: int) -> Self:
@@ -193,7 +179,7 @@ class GameContext(ABC):
             gctx.event_log.append(reload_event)
             reload_event.update(gctx, len(gctx.event_log)-1)
             
-            gctx.realise(thread_id)
+            gctx.assign_thread(thread_id)
 
             return gctx
 
@@ -203,7 +189,7 @@ class Reload(GameEvent[GameContext]):
         self.pause_duration = pause_duration
 
     @staticmethod
-    def event_type() -> str: return "___reload__"
+    def event_type() -> str: return "__reload__"
 
     def to_dict(self) -> dict[str, Any]: return {"pause_duration": self.pause_duration}
 

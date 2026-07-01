@@ -9,6 +9,7 @@ from discord import ApplicationContext, AutocompleteContext, option # pyright: i
 import discord
 import pathlib
 import asyncio
+import atexit
 import os
 
 
@@ -60,14 +61,16 @@ class JLOXBot[ContextType: GameContext](discord.Bot):
     def getGameCtx(self, channel_id: int) -> ContextType:
         return self.games[channel_id]
     
+    def save_on_exit_handler(self):
+        print("Shutting down!")
+        loop = asyncio.new_event_loop()
+        loop.run_until_complete(asyncio.gather(*(loop.create_task(gctx.save(self.save_dir)) for gctx in self.games.values())))
+        loop.close()
+        self.scheduler_task.cancel()
+    
     def run(self, *args: Any, **kwargs: Any):
-        try:
-            super().run(*args, **kwargs)
-        except KeyboardInterrupt:
-            print("Shutting down!")
-            self.scheduler_task.cancel()
-            for gctx in self.games.values():
-                asyncio.create_task(gctx.save(self.save_dir))
+        atexit.register(self.save_on_exit_handler)
+        super().run(*args, **kwargs)
     
     async def scheduler(self) -> None:
         try:
@@ -77,7 +80,7 @@ class JLOXBot[ContextType: GameContext](discord.Bot):
             while True:
                 do_save = t >= 60
                 for gctx in self.games.values():
-                    assert gctx.real
+                    assert gctx.has_thread
                     await gctx.schedule_tick()
                     
                     if do_save:
@@ -108,7 +111,7 @@ class JLOXBot[ContextType: GameContext](discord.Bot):
             channel = dctx.channel
             thread = await channel.create_thread(name=gctx.name, type=discord.ChannelType.public_thread)
             
-            gctx.realise(thread.id)
+            gctx.assign_thread(thread.id)
             self.games[thread.id] = gctx
             
             await gctx.save(self.save_dir)
@@ -129,6 +132,9 @@ class JLOXBot[ContextType: GameContext](discord.Bot):
         user = cast(discord.User, dctx.user)
         
         gctx.teams[[team.name for team in gctx.teams].index(team)].add_user(user)
+    
+    async def reload(self, dctx: ApplicationContext, gctx: ContextType):
+        self.games[gctx.thread_id] = self.ctx_cls.load(self.save_dir, gctx.thread_id)
         
     
     # start
