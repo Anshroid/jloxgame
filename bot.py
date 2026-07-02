@@ -110,9 +110,14 @@ class JLOXBot[ContextType: GameContext](discord.Bot):
             assert isinstance(dctx.channel, discord.TextChannel)
             channel = dctx.channel
             thread = await channel.create_thread(name=gctx.name, type=discord.ChannelType.public_thread)
-            
+
             gctx.assign_thread(thread.id)
             self.games[thread.id] = gctx
+
+            for team in gctx.teams:
+                if team.create_thread:
+                    thread = await channel.create_thread(name=gctx.name, type=discord.ChannelType.private_thread)
+                    team.thread_id = thread.id
             
             await gctx.save(self.save_dir)
 

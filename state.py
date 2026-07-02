@@ -13,11 +13,15 @@ class Team:
     def __init__(self, name: str) -> None:
         self.name = name
         self.players: dict[int, User | None] = {}
+        self.create_thread = True
+        self.thread_id = -1
+    
+    has_thread = property(lambda self: self.thread_id != -1)
     
     def add_user(self, user: User) -> None:
         self.players[user.id] = user
     
-    def to_dict(self) -> dict[str, Any]: return {"name": self.name, "players": list(self.players.keys())}
+    def to_dict(self) -> dict[str, Any]: return {"name": self.name, "players": list(self.players.keys()), "thread_id": self.thread_id}
     
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Self:
@@ -48,7 +52,6 @@ class GameContext(ABC):
         self.status = Status.SETUP
         
         self.thread_id = -1
-        self.has_thread = False
         
         self.init_time = time.time_ns() // 1000
         self.last_update = self.init_time
@@ -61,10 +64,10 @@ class GameContext(ABC):
         self.event_log: list[GameEvent[Self]] = []
         self.scheduled_events: list[GameEvent[Self]] = []
         self.teams: list[Team] = []
-        
+    
+    has_thread = property(lambda self: self.thread_id != -1)
     
     def assign_thread(self, thread_id: int):
-        self.has_thread = True
         self.thread_id = thread_id
         
     def game_time_now(self) -> int:
