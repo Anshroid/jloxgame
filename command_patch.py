@@ -6,6 +6,7 @@ from discord import (
 from typing import OrderedDict, Callable, Any, Concatenate, cast, Self
 from inspect import Parameter
 
+import discord
 from discord.ext.commands.cooldowns import CooldownMapping, MaxConcurrency # pyright: ignore[reportMissingTypeStubs]
 from .abc import AsyncCallable
 
@@ -13,16 +14,17 @@ class GameCommand[S](SlashCommand):
     def __new__(cls, *args: Any, **kwargs: Any) -> Self:
         return cast(Self, super().__new__(cls, *args, **kwargs)) # pyright: ignore[reportUnknownMemberType]
     
-    def __init__(self, func: Callable[..., Any], *args: Any, getGameCtx: Callable[[int], S], **kwargs: Any) -> None:
+    def __init__(self, func: Callable[..., Any], *args: Any, getGameCtx: Callable[[int], S | None], **kwargs: Any) -> None:
         super().__init__(func, *args, **kwargs) # pyright: ignore[reportUnknownMemberType]
 
         async def applied(dctx: ApplicationContext, *args: Any, **kwargs: Any):
-                assert dctx.channel_id is not None
-                try:
-                    gctx = getGameCtx(dctx.channel_id)
-                    await func(dctx, gctx, *args, **kwargs)
-                except KeyError:
-                    await dctx.respond("No game found in this channel!")
+            assert dctx.channel_id is not None
+            gctx = getGameCtx(dctx.channel_id)
+            if gctx == None:
+                await dctx.respond("No game found in this channel!")
+                return
+                
+            await func(dctx, gctx, *args, **kwargs)
 
         self.callback = applied        
         
@@ -45,13 +47,13 @@ class GameCommandGroup[S](SlashCommandGroup):
     def __new__(cls, *args: Any, **kwargs: Any) -> GameCommandGroup[S]:
         return cast(GameCommandGroup[S], super().__new__(cls, *args, **kwargs)) # pyright: ignore[reportUnknownMemberType]
 
-    def __init__(self, getGameCtx: Callable[[int], S], name: str, description: str | None = None, guild_ids: list[int] | None = None, parent: GameCommandGroup[S] | None = None, cooldown: CooldownMapping | None = None, max_concurrency: MaxConcurrency | None = None, **kwargs: Any) -> None:
+    def __init__(self, getGameCtx: Callable[[int], S | None], name: str, description: str | None = None, guild_ids: list[int] | None = None, parent: GameCommandGroup[S] | None = None, cooldown: CooldownMapping | None = None, max_concurrency: MaxConcurrency | None = None, **kwargs: Any) -> None:
         super().__init__(name, description, guild_ids, parent, cooldown, max_concurrency, **kwargs) # pyright: ignore[reportUnknownMemberType]
         self.getGameCtx = getGameCtx
 
     def game_command[**Ts](self, **kwargs: Any):
-        def decorator(func: AsyncCallable[Concatenate[ApplicationContext, S, Ts], None]): # pyright: ignore[reportUnknownParameterType]
-            return self.command(cls=GameCommand, getGameCtx=self.getGameCtx, **kwargs)(func) # pyright: ignore[reportUnknownVariableType, reportUnknownMemberType] 
+        def decorator(func: AsyncCallable[Concatenate[ApplicationContext, S, Ts], None]) -> GameCommand[S]: # pyright: ignore[reportUnknownParameterType]
+            return discord.guild_only()(self.command(cls=GameCommand[S], getGameCtx=self.getGameCtx, **kwargs)(func)) # pyright: ignore[reportUnknownVariableType, reportUnknownMemberType] 
         
         return decorator
     
