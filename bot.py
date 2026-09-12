@@ -1,4 +1,3 @@
-from asyncio.base_events import traceback
 from .abc import AsyncCallable
 from .state import GameContext, Team
 from .command_patch import GameCommand, GameCommandGroup
@@ -7,6 +6,7 @@ from typing import Concatenate, Any, Self, cast
 
 from discord import ApplicationCommand, ApplicationContext, AutocompleteContext, Member, Role, TextChannel, Thread, default_permissions, option # pyright: ignore[reportUnknownVariableType]
 
+import traceback
 import discord
 import pathlib
 import asyncio
@@ -26,7 +26,7 @@ class JLOXBot[ContextType: GameContext](discord.Bot):
         game_group = self.create_group("game")
         discord.guild_only()(game_group.command()(self.create)) # pyright: ignore[reportUnknownMemberType]
         game_group.game_command()(self.configure)
-        game_group.game_command(name="start")(self._start)
+        game_group.game_command(name="start")(self.start_command)
         game_group.game_command()(self.end)
         game_group.game_command()(self.reload)
 
@@ -37,6 +37,8 @@ class JLOXBot[ContextType: GameContext](discord.Bot):
         if joinable:
             self.game_command()(self.join)
             self.game_command()(self.leave)
+        else:
+            self.game_command()(self.assign)
     
         
         if not self.save_dir.exists():
@@ -84,7 +86,7 @@ class JLOXBot[ContextType: GameContext](discord.Bot):
                 self.team_thread_map.update({team.thread_id: game_thread_id for team in gctx.teams if team.thread})
 
                 for event in gctx.initial_events:
-                    gctx.add_event(event)
+                    gctx.actualise_instance(event)
                 gctx.initial_events = []
 
                 print(f"[jloxgame | info] loaded game {game_thread_id}")
@@ -180,7 +182,7 @@ class JLOXBot[ContextType: GameContext](discord.Bot):
             self.team_thread_map.update({team.thread_id: thread.id for team in gctx.teams if team.thread})
 
             for event in gctx.initial_events:
-                gctx.add_event(event)
+                gctx.actualise_instance(event)
             gctx.initial_events = []
             
             asyncio.gather(gctx.save(self.save_dir), thread.send(f"Created a game in this thread!"))
@@ -263,7 +265,7 @@ class JLOXBot[ContextType: GameContext](discord.Bot):
         self.games[gctx.thread_id] = self._ctx_cls.load(self.save_dir, gctx.thread_id)
         await dctx.respond("Game reloaded successfully!", ephemeral=True)
         
-    async def _start(self, dctx: ApplicationContext, gctx: ContextType):
+    async def start_command(self, dctx: ApplicationContext, gctx: ContextType):
         """Start this thread's game."""
         await gctx.start(dctx)
 
