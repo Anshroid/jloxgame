@@ -5,7 +5,7 @@ from types import GenericAlias
 from discord import ApplicationContext, Member, Role, Thread
 from enum import Enum
 from typing import Any, Callable, Concatenate, Coroutine, Self, cast, get_args, get_origin, overload
-from inspect import Parameter, Signature, signature
+from inspect import Parameter, Signature, signature, iscoroutinefunction
 import pathlib, json, time, asyncio, random
 
 Status = Enum("Status", "INIT SETUP RUNNING PAUSED END")
@@ -73,12 +73,7 @@ class BoundEvent[ContextType: GameContext, **Params, ReturnType]:
         
         print(f"[{gctx.thread_id} | info] adding event {self.event_type()}")
 
-        try:
-            ret = self.event.func(gctx, *args, **kwargs)
-        except Exception as e:
-            asyncio.create_task(gctx.save(pathlib.Path() / "save")) # TODO: hardcoded
-            raise e
-
+        ret = self.event.func(gctx, *args, **kwargs)
         inst = self.get_instance(gctx.game_time_now(), *args, **kwargs)
         gctx.event_log.append(inst)
 
@@ -102,7 +97,7 @@ def event[ContextType: GameContext, **Params, ReturnType](*, callback: CallbackW
 
 def event[ContextType: GameContext, **Params, ReturnType](*, callback: CallbackWithReturnedVal[ContextType, Params, ReturnType] | CallbackWithoutReturnedVal[ContextType, Params] | None = None):
     def inner(func: Callable[Concatenate[ContextType, Params], ReturnType], /) -> Event[ContextType, Params, ReturnType]:
-        if asyncio.iscoroutinefunction(func):
+        if iscoroutinefunction(func):
             raise ValueError(f"Invalid function {func} marked as event: function may not be async!")
 
         sig = signature(func, eval_str=True)
