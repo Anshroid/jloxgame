@@ -1,16 +1,19 @@
-from __future__ import annotations # TODO: Remove when updated to 3.14
 from discord import (
     SlashCommand, ClientException, ApplicationContext,
     SlashCommandGroup
 )
-from typing import OrderedDict, Callable, Any, Concatenate, cast, Self
+from typing import TYPE_CHECKING, OrderedDict, Callable, Any, Concatenate, cast, Self
 from inspect import Parameter
+
+if TYPE_CHECKING:
+    from jloxgame.state import GameContext
+from .log_contextvars import game_id
 
 import discord
 from discord.ext.commands.cooldowns import CooldownMapping, MaxConcurrency # pyright: ignore[reportMissingTypeStubs]
 from .abc import AsyncCallable
 
-class GameCommand[S](SlashCommand):
+class GameCommand[S: GameContext](SlashCommand):
     def __new__(cls, *args: Any, **kwargs: Any) -> Self:
         return cast(Self, super().__new__(cls, *args, **kwargs)) # pyright: ignore[reportUnknownMemberType]
     
@@ -23,7 +26,8 @@ class GameCommand[S](SlashCommand):
             if gctx == None:
                 await dctx.respond("No game found in this channel!")
                 return
-                
+            
+            game_id.set(gctx.thread_id)
             await func(dctx, gctx, *args, **kwargs)
 
         self.callback = applied        
@@ -43,7 +47,7 @@ class GameCommand[S](SlashCommand):
 
             return params_iter
 
-class GameCommandGroup[S](SlashCommandGroup):
+class GameCommandGroup[S: GameContext](SlashCommandGroup):
     def __new__(cls, *args: Any, **kwargs: Any) -> GameCommandGroup[S]:
         return cast(GameCommandGroup[S], super().__new__(cls, *args, **kwargs)) # pyright: ignore[reportUnknownMemberType]
 

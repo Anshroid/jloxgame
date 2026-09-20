@@ -1,3 +1,5 @@
+import logging
+import logging.config
 from .abc import AsyncCallable
 from .state import GameContext, Team
 from .command_patch import GameCommand, GameCommandGroup
@@ -15,13 +17,19 @@ import os
 
 
 class JLOXBot[ContextType: GameContext](discord.Bot):
-    def __init__(self, ctx_cls: type[ContextType], save_dir: pathlib.Path, joinable: bool=True, member_creatable: bool=True, *args: Any, **options: Any):
+    def __init__(self, ctx_cls: type[ContextType], save_dir: pathlib.Path, joinable: bool=True, member_creatable: bool=True, logging_enabled: bool=True, *args: Any, **options: Any):
         super().__init__(*args, **options) # pyright: ignore[reportUnknownMemberType]
         
         self._ctx_cls = ctx_cls
         self.save_dir = save_dir
         self.games: dict[int, ContextType] = {}
         self.team_thread_map: dict[int, int] = {}
+
+        if logging_enabled:
+            logging.config.fileConfig(pathlib.Path(__file__).parent / "logging.conf")
+            
+        self.logger = logging.getLogger("jloxgame")
+        self.logger.setLevel(logging.DEBUG)
 
         game_group = self.create_group("game")
         discord.guild_only()(game_group.command()(self.create)) # pyright: ignore[reportUnknownMemberType]
@@ -89,7 +97,7 @@ class JLOXBot[ContextType: GameContext](discord.Bot):
                     gctx.actualise_instance(event)
                 gctx.initial_events = []
 
-                print(f"[jloxgame | info] loaded game {game_thread_id}")
+                self.logger.info(f"loaded game {game_thread_id}")
 
     def command[**Ts](self, **kwargs: Any):
         def decorator(func: AsyncCallable[Concatenate[ApplicationContext, Ts], None]): # pyright: ignore[reportUnknownParameterType]
@@ -138,7 +146,7 @@ class JLOXBot[ContextType: GameContext](discord.Bot):
     
     async def scheduler(self) -> None:
         try:
-            print(f"[jloxgame | info] starting event scheduler")
+            self.logger.info(f"starting event scheduler")
             
             t = 0
             while True:

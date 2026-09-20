@@ -1,12 +1,14 @@
 from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+import logging
 from types import GenericAlias
 from discord import ApplicationContext, Member, Role, Thread
 from enum import Enum
 from typing import Any, Callable, Concatenate, Coroutine, Self, cast, get_args, get_origin, overload
 from inspect import Parameter, Signature, signature, iscoroutinefunction
 import pathlib, json, time, asyncio, random
+from .log_contextvars import game_id, event_name
 
 Status = Enum("Status", "INIT SETUP RUNNING PAUSED END")
 
@@ -71,7 +73,10 @@ class BoundEvent[ContextType: GameContext, **Params, ReturnType]:
         if gctx.thread_id == -1:
             raise ValueError("Event added before initialisation!")
         
-        print(f"[{gctx.thread_id} | info] adding event {self.event_type()}")
+        gctx.logger.info(f"processing event {self.event_type()}")
+
+        event_name.set(self.event_type())
+        game_id.set(gctx.thread_id)
 
         ret = self.event.func(gctx, *args, **kwargs)
         inst = self.get_instance(gctx.game_time_now(), *args, **kwargs)
@@ -114,7 +119,7 @@ def event[ContextType: GameContext, **Params, ReturnType](*, callback: CallbackW
             if not _serializable(param.annotation):
                 raise ValueError(f"Invalid function {func} marked as event: parameter {name} of type {param.annotation} is not serializable!")
 
-        print(f"[jloxgame | info] registered event {func.__name__}")
+        logging.getLogger("jloxgame").info(f"registered event {func.__name__}")
 
         return Event(func, callback)
     
@@ -176,6 +181,8 @@ class GameContext(ABC):
 
         self.paused = True
         self.loading = False
+
+        self.logger = logging.getLogger(f"jloxevent")
         
         self.init_time = time.time_ns() // 1000000
         self.last_update = 0
@@ -235,7 +242,7 @@ class GameContext(ABC):
             m (int): Number of minutes in the future to schedule.
             s (int): Number of seconds in the future to schedule.
         """
-        print(f"[{self.thread_id} | info] scheduling event {event.event_type()}")
+        self.logger.info(f"scheduling event {event.event_type()}")
         inst = event.get_instance(self.game_time_now() + ((h*60 + m)*60 + s)*1000, *args, **kwargs)
         self.scheduled_events.append(inst)
         self.scheduled_events.sort(key=lambda e: e.__time__) # O(nlogn) insert :skull:
@@ -246,8 +253,8 @@ class GameContext(ABC):
         if len(self.scheduled_events) > 0:
             # lock not needed here since there is no async during the state modification (this coro cannot be interrupted)
             while len(self.scheduled_events) > 0 and self.game_time_now() > self.scheduled_events[0].__time__:             
-                inst = self.scheduled_events.pop(0)
-                print(f"[{self.thread_id} | info] processing scheduled event {inst.__type__}")
+                inst = self.scheduled_events.pop(0) # TODO: bot crash when event is in neither list
+                self.logger.info(f"applying scheduled event {inst.__type__}")
                 self.actualise_instance(inst)
                     
         self.last_update = self.game_time_now()
@@ -267,7 +274,7 @@ class GameContext(ABC):
                 raise TypeError(f"Could not encode {obj} into JSON!")
 
     async def save(self, dir: pathlib.Path) -> None:
-        print(f"[{self.thread_id} | info] saving game")
+        self.logger.info(f"saving game")
         with open(dir / f"{self.thread_id}.json", "w") as f:
             data: dict[str, Any] = {
                 "init_time": self.init_time,
@@ -288,6 +295,7 @@ class GameContext(ABC):
             gctx.init_time = data["init_time"]
             
             gctx.thread_id = thread_id
+            gctx.logger = logging.getLogger(f"jloxgame.{thread_id}")
 
             gctx.loading = True
 
@@ -297,7 +305,7 @@ class GameContext(ABC):
             for event_dict in data["event_log"]:
                 inst = EventInstance(event_dict["__type__"], event_dict["__time__"], event_dict["args"], event_dict["kwargs"])
                 if inst.__time__ > data["last_update"]:
-                    print(f"[{gctx.thread_id} | info] scheduling event {inst.__type__}")
+                    gctx.logger.info(f"rescheduling event {inst.__type__}")
                     gctx.scheduled_events.append(inst)
                     gctx.scheduled_events.sort(key=lambda e: e.__time__)
                 else:
@@ -313,6 +321,8 @@ class GameContext(ABC):
     @event()
     def __reload__(self, pause_duration: int) -> None:
         self.pause_duration += pause_duration
+
+        self.logger.info("hi")
 
     def unpause(self) -> None:
         self.paused = False
