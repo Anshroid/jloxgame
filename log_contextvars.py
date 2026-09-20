@@ -1,4 +1,9 @@
 from contextvars import ContextVar
+from logging import Filter, LogRecord
 
-event_name: ContextVar[str] = ContextVar("eventType")
 game_id: ContextVar[int] = ContextVar("gameId")
+
+class GameInjector(Filter):
+    def filter(self, record: LogRecord) -> bool | LogRecord:
+        record.gameId = game_id.get()
+        return True

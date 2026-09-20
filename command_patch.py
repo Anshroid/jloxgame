@@ -6,14 +6,14 @@ from typing import TYPE_CHECKING, OrderedDict, Callable, Any, Concatenate, cast,
 from inspect import Parameter
 
 if TYPE_CHECKING:
-    from jloxgame.state import GameContext
+    from .state import GameContext
 from .log_contextvars import game_id
 
 import discord
 from discord.ext.commands.cooldowns import CooldownMapping, MaxConcurrency # pyright: ignore[reportMissingTypeStubs]
 from .abc import AsyncCallable
 
-class GameCommand[S: GameContext](SlashCommand):
+class GameCommand[S](SlashCommand):
     def __new__(cls, *args: Any, **kwargs: Any) -> Self:
         return cast(Self, super().__new__(cls, *args, **kwargs)) # pyright: ignore[reportUnknownMemberType]
     
@@ -26,7 +26,9 @@ class GameCommand[S: GameContext](SlashCommand):
             if gctx == None:
                 await dctx.respond("No game found in this channel!")
                 return
+
             
+            gctx = cast(GameContext, gctx)
             game_id.set(gctx.thread_id)
             await func(dctx, gctx, *args, **kwargs)
 
@@ -47,7 +49,7 @@ class GameCommand[S: GameContext](SlashCommand):
 
             return params_iter
 
-class GameCommandGroup[S: GameContext](SlashCommandGroup):
+class GameCommandGroup[S](SlashCommandGroup):
     def __new__(cls, *args: Any, **kwargs: Any) -> GameCommandGroup[S]:
         return cast(GameCommandGroup[S], super().__new__(cls, *args, **kwargs)) # pyright: ignore[reportUnknownMemberType]
 

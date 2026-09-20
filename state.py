@@ -1,14 +1,15 @@
-from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 import logging
 from types import GenericAlias
 from discord import ApplicationContext, Member, Role, Thread
 from enum import Enum
-from typing import Any, Callable, Concatenate, Coroutine, Self, cast, get_args, get_origin, overload
+from typing import Any, Callable, Concatenate, Self, cast, get_args, get_origin, overload
 from inspect import Parameter, Signature, signature, iscoroutinefunction
 import pathlib, json, time, asyncio, random
-from .log_contextvars import game_id, event_name
+
+from jloxgame.abc import AsyncCallable
+from .log_contextvars import GameInjector, game_id
 
 Status = Enum("Status", "INIT SETUP RUNNING PAUSED END")
 
@@ -16,8 +17,8 @@ Status = Enum("Status", "INIT SETUP RUNNING PAUSED END")
 
 type Serializable = str | int | float | bool | list[Serializable] | tuple[Serializable] | dict[str, Serializable]
 type EventFunc[ContextType, **Params, ReturnType] = Callable[Concatenate[ContextType, Params], ReturnType] 
-type CallbackWithReturnedVal[ContextType, **Params, ReturnType] = Callable[Concatenate[ContextType, ReturnType, Params], Coroutine[Any, Any, None]] 
-type CallbackWithoutReturnedVal[ContextType, **Params] = Callable[Concatenate[ContextType, Params], Coroutine[Any, Any, None]]
+type CallbackWithReturnedVal[ContextType, **Params, ReturnType] = AsyncCallable[Concatenate[ContextType, ReturnType, Params], None]
+type CallbackWithoutReturnedVal[ContextType, **Params] = AsyncCallable[Concatenate[ContextType, Params], None]
 
 def _serializable(_type: type) -> bool:
     if _type in [str, int, float, bool]:
@@ -73,10 +74,8 @@ class BoundEvent[ContextType: GameContext, **Params, ReturnType]:
         if gctx.thread_id == -1:
             raise ValueError("Event added before initialisation!")
         
-        gctx.logger.info(f"processing event {self.event_type()}")
-
-        event_name.set(self.event_type())
         game_id.set(gctx.thread_id)
+        gctx.logger.info(f"processing event {self.event_type()}")
 
         ret = self.event.func(gctx, *args, **kwargs)
         inst = self.get_instance(gctx.game_time_now(), *args, **kwargs)
@@ -182,7 +181,8 @@ class GameContext(ABC):
         self.paused = True
         self.loading = False
 
-        self.logger = logging.getLogger(f"jloxevent")
+        self.logger = logging.getLogger(f"jloxgame.game")
+        self.logger.addFilter(GameInjector())
         
         self.init_time = time.time_ns() // 1000000
         self.last_update = 0
@@ -225,12 +225,7 @@ class GameContext(ABC):
 
     def actualise_instance(self, inst: EventInstance):
         bound_event: BoundEvent[Self, Any, Any] = getattr(self, inst.__type__)
-
-        try:
-            bound_event(*inst.args, **inst.kwargs)
-        except Exception as e:
-            asyncio.create_task(self.save(pathlib.Path() / "save"))
-            raise ValueError(f"[{self.thread_id} | info] exception raised in event {inst.to_dict()}, reloading recommended") from e
+        bound_event(*inst.args, **inst.kwargs)
 
     def schedule_event[**Params, ReturnType](self, h: int, m: int, s: int, event: BoundEvent[Self, Params, ReturnType], *args: Params.args, **kwargs: Params.kwargs) -> None:
         """Schedule an event to be added to the event log.
@@ -295,7 +290,6 @@ class GameContext(ABC):
             gctx.init_time = data["init_time"]
             
             gctx.thread_id = thread_id
-            gctx.logger = logging.getLogger(f"jloxgame.{thread_id}")
 
             gctx.loading = True
 
@@ -321,8 +315,6 @@ class GameContext(ABC):
     @event()
     def __reload__(self, pause_duration: int) -> None:
         self.pause_duration += pause_duration
-
-        self.logger.info("hi")
 
     def unpause(self) -> None:
         self.paused = False

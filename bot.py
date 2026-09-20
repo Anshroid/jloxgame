@@ -4,7 +4,7 @@ from .abc import AsyncCallable
 from .state import GameContext, Team
 from .command_patch import GameCommand, GameCommandGroup
 
-from typing import Concatenate, Any, Self, cast
+from typing import Concatenate, Any, cast
 
 from discord import ApplicationCommand, ApplicationContext, AutocompleteContext, Member, Role, TextChannel, Thread, default_permissions, option # pyright: ignore[reportUnknownVariableType]
 
@@ -106,7 +106,7 @@ class JLOXBot[ContextType: GameContext](discord.Bot):
     
     def game_command[**Ts](self, **kwargs: Any):
         def decorator(func: AsyncCallable[Concatenate[ApplicationContext, ContextType, Ts], None]): # pyright: ignore[reportUnknownParameterType]
-            return self.application_command(cls=GameCommand[Self], getGameCtx=self.get_game_ctx, **kwargs)(func)
+            return self.application_command(cls=GameCommand[ContextType], getGameCtx=self.get_game_ctx, **kwargs)(func)
         return decorator
 
     def create_group(self, name: str, description: str | None = None, guild_ids: list[int] | None = None, **kwargs: Any) -> GameCommandGroup[ContextType]:
@@ -134,7 +134,7 @@ class JLOXBot[ContextType: GameContext](discord.Bot):
         return self.games.get(channel_id, None)
     
     def save_on_exit_handler(self):
-        print("[jloxgame | info] shutting down")
+        self.logger.info("shutting down")
         loop = asyncio.new_event_loop()
         loop.run_until_complete(asyncio.gather(*(loop.create_task(gctx.save(self.save_dir)) for gctx in self.games.values())))
         loop.close()
@@ -165,7 +165,7 @@ class JLOXBot[ContextType: GameContext](discord.Bot):
                 await asyncio.sleep(1)
                 
         except asyncio.CancelledError:
-            print(f"[jloxgame | info] shutting down event scheduler")
+            self.logger.info(f"shutting down event scheduler")
 
     # UNIVERSAL GAME COMMANDS
     
