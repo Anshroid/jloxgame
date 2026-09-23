@@ -11,14 +11,14 @@ import pathlib, json, time, asyncio, random
 from jloxgame.abc import AsyncCallable
 from .log_contextvars import GameInjector, game_id
 
-Status = Enum("Status", "INIT SETUP RUNNING PAUSED END")
+Status = Enum("Status", "INIT SETUP RUNNING END")
 
 ######################################## EVENTS ########################################
 
 type Serializable = str | int | float | bool | list[Serializable] | tuple[Serializable] | dict[str, Serializable]
 type EventFunc[ContextType, **Params, ReturnType] = Callable[Concatenate[ContextType, Params], ReturnType] 
-type CallbackWithReturnedVal[ContextType, **Params, ReturnType] = AsyncCallable[Concatenate[ContextType, ReturnType, Params], None]
-type CallbackWithoutReturnedVal[ContextType, **Params] = AsyncCallable[Concatenate[ContextType, Params], None]
+type CallbackWithReturnedVal[ContextType, ReturnType] = AsyncCallable[[ContextType, ReturnType], None]
+type CallbackWithoutReturnedVal[ContextType] = AsyncCallable[[ContextType], None]
 
 def _serializable(_type: type) -> bool:
     if _type in [str, int, float, bool]:
@@ -39,6 +39,7 @@ class EventInstance:
     __time__: int
     args: list[Serializable]
     kwargs: dict[str, Serializable]
+    was_scheduled: bool = False
 
     def to_dict(self): return {"__type__": self.__type__, "__time__": self.__time__, "args": self.args, "kwargs": self.kwargs}
 
@@ -46,7 +47,7 @@ class Event[ContextType: GameContext, **Params, ReturnType]:
     def __init__(
         self, 
         func: EventFunc[ContextType, Params, ReturnType], 
-        callback: CallbackWithReturnedVal[ContextType, Params, ReturnType] | CallbackWithoutReturnedVal[ContextType, Params] | None = None
+        callback: CallbackWithReturnedVal[ContextType, ReturnType] | CallbackWithoutReturnedVal[ContextType] | None = None
     ) -> None:
         self.func = func
         self.callback = callback
@@ -63,11 +64,25 @@ class BoundEvent[ContextType: GameContext, **Params, ReturnType]:
     def __init__(self, event: Event[ContextType, Params, ReturnType], gctx: ContextType) -> None:
         self.event = event
         self.gctx = gctx
+
+        self.scheduled = False
+        self.do_callback = True
     
     def event_type(self): return self.event.event_type()
 
     def get_instance(self, time: int, *args: Params.args, **kwargs: Params.kwargs) -> EventInstance:
         return EventInstance(self.event_type(), time, cast(list[Serializable], args), cast(dict[str, Serializable], kwargs))
+    
+    def get_scheduled_instance(self, time: int, *args: Params.args, **kwargs: Params.kwargs) -> EventInstance:
+        return EventInstance(self.event_type(), time, cast(list[Serializable], args), cast(dict[str, Serializable], kwargs), was_scheduled=True)
+    
+    def call_special(self, scheduled: bool = False, do_callback: bool = True, *args: Params.args, **kwargs: Params.kwargs) -> ReturnType:
+        self.scheduled = scheduled
+        self.do_callback = do_callback
+        ret = self(*args, **kwargs)
+        self.scheduled = False
+        self.do_callback = True
+        return ret
     
     def __call__(self, *args: Params.args, **kwargs: Params.kwargs) -> ReturnType:
         gctx = self.gctx
@@ -77,17 +92,26 @@ class BoundEvent[ContextType: GameContext, **Params, ReturnType]:
         game_id.set(gctx.thread_id)
         gctx.logger.info(f"processing event {self.event_type()}")
 
+        gctx.in_event = True
+
         ret = self.event.func(gctx, *args, **kwargs)
-        inst = self.get_instance(gctx.game_time_now(), *args, **kwargs)
+
+        try:
+            inst = self.get_instance(gctx.game_time_now(), *args, **kwargs) if not self.scheduled else self.get_scheduled_instance(gctx.game_time_now(), *args, **kwargs) 
+        except Exception as e:
+            gctx.logger.warning("exception raised while processing event, not saved")
+            raise e
         gctx.event_log.append(inst)
 
-        if self.event.callback:
+        gctx.in_event = False
+
+        if self.event.callback and self.do_callback:
             if self.event.has_return_type:
-                callback = cast(CallbackWithReturnedVal[ContextType, Params, ReturnType], self.event.callback)
-                asyncio.create_task(callback(gctx, ret, *args, **kwargs))
+                callback = cast(CallbackWithReturnedVal[ContextType, ReturnType], self.event.callback)
+                asyncio.create_task(callback(gctx, ret))
             else:
-                callback = cast(CallbackWithoutReturnedVal[ContextType, Params], self.event.callback)
-                asyncio.create_task(callback(gctx, *args, **kwargs))
+                callback = cast(CallbackWithoutReturnedVal[ContextType], self.event.callback)
+                asyncio.create_task(callback(gctx))
         return ret
     
     def __repr__(self) -> str: return f"<jloxgame.state.BoundEvent object on context {self.gctx} of type {self.event_type()}>"
@@ -95,11 +119,11 @@ class BoundEvent[ContextType: GameContext, **Params, ReturnType]:
 @overload
 def event[ContextType: GameContext, **Params, ReturnType](*, callback: None = None) -> Callable[[EventFunc[ContextType, Params, ReturnType]], Event[ContextType, Params, ReturnType]]: ...
 @overload
-def event[ContextType: GameContext, **Params, ReturnType](*, callback: CallbackWithoutReturnedVal[ContextType, Params]) -> Callable[[EventFunc[ContextType, Params, ReturnType]], Event[ContextType, Params, ReturnType]]: ...
+def event[ContextType: GameContext, **Params](*, callback: CallbackWithoutReturnedVal[ContextType]) -> Callable[[EventFunc[ContextType, Params, None]], Event[ContextType, Params, None]]: ...
 @overload
-def event[ContextType: GameContext, **Params, ReturnType](*, callback: CallbackWithReturnedVal[ContextType, Params, ReturnType]) -> Callable[[EventFunc[ContextType, Params, ReturnType]], Event[ContextType, Params, ReturnType]]: ...
+def event[ContextType: GameContext, **Params, ReturnType](*, callback: CallbackWithReturnedVal[ContextType, ReturnType]) -> Callable[[EventFunc[ContextType, Params, ReturnType]], Event[ContextType, Params, ReturnType]]: ...
 
-def event[ContextType: GameContext, **Params, ReturnType](*, callback: CallbackWithReturnedVal[ContextType, Params, ReturnType] | CallbackWithoutReturnedVal[ContextType, Params] | None = None):
+def event[ContextType: GameContext, **Params, ReturnType](*, callback: CallbackWithReturnedVal[ContextType, ReturnType] | CallbackWithoutReturnedVal[ContextType] | None = None):
     def inner(func: Callable[Concatenate[ContextType, Params], ReturnType], /) -> Event[ContextType, Params, ReturnType]:
         if iscoroutinefunction(func):
             raise ValueError(f"Invalid function {func} marked as event: function may not be async!")
@@ -178,8 +202,9 @@ class GameContext(ABC):
         self.thread_id: int = -1
         self.thread: Thread | None = None
 
-        self.paused = True
-        self.loading = False
+        self._paused = True
+        self._loading = False
+        self.in_event = False
 
         self.logger = logging.getLogger(f"jloxgame.game")
         self.logger.addFilter(GameInjector())
@@ -210,9 +235,8 @@ class GameContext(ABC):
         except StopIteration:
             raise ValueError(f"Invalid team id provided: {id}")
         
-    def game_time_now(self) -> int: # TODO: during loading, spoof this
-        if self.paused or self.loading: return self.last_update
-        return (time.time_ns() // 1000000) - self.init_time - self.pause_duration
+    def game_time_now(self) -> int:
+        return self.last_update if self._paused or self._loading else (time.time_ns() // 1000000) - self.init_time - self.pause_duration
     
     def unix_ms_to_game_time(self, unix_ms: int) -> int: # TODO: Maybe remove these?
         return unix_ms - self.init_time - self.pause_duration
@@ -222,10 +246,6 @@ class GameContext(ABC):
     
     def game_time_to_unix_ms(self, game_time: int) -> int:
         return (game_time // 1000000) + self.init_time + self.pause_duration
-
-    def actualise_instance(self, inst: EventInstance):
-        bound_event: BoundEvent[Self, Any, Any] = getattr(self, inst.__type__)
-        bound_event(*inst.args, **inst.kwargs)
 
     def schedule_event[**Params, ReturnType](self, h: int, m: int, s: int, event: BoundEvent[Self, Params, ReturnType], *args: Params.args, **kwargs: Params.kwargs) -> None:
         """Schedule an event to be added to the event log.
@@ -237,20 +257,25 @@ class GameContext(ABC):
             m (int): Number of minutes in the future to schedule.
             s (int): Number of seconds in the future to schedule.
         """
+        if not self.in_event: raise ValueError("Events may only be scheduled from inside events!")
+        
+        game_id.set(self.thread_id)
         self.logger.info(f"scheduling event {event.event_type()}")
-        inst = event.get_instance(self.game_time_now() + ((h*60 + m)*60 + s)*1000, *args, **kwargs)
+        inst = event.get_scheduled_instance(self.game_time_now() + ((h*60 + m)*60 + s)*1000, *args, **kwargs)
         self.scheduled_events.append(inst)
         self.scheduled_events.sort(key=lambda e: e.__time__) # O(nlogn) insert :skull:
         # technically a min-heap would be optimal, but who cares, right?
     
     async def schedule_tick(self) -> None:
-        if self.paused: return
+        if self._paused or self._loading: return
         if len(self.scheduled_events) > 0:
             # lock not needed here since there is no async during the state modification (this coro cannot be interrupted)
-            while len(self.scheduled_events) > 0 and self.game_time_now() > self.scheduled_events[0].__time__:             
-                inst = self.scheduled_events.pop(0) # TODO: bot crash when event is in neither list
+            while len(self.scheduled_events) > 0 and self.game_time_now() > self.scheduled_events[0].__time__:
+                inst = self.scheduled_events.pop(0)
+                game_id.set(self.thread_id)
                 self.logger.info(f"applying scheduled event {inst.__type__}")
-                self.actualise_instance(inst)
+                bound_event: BoundEvent[Self, Any, Any] = getattr(self, inst.__type__)
+                bound_event.call_special(inst.was_scheduled, True, *inst.args, **inst.kwargs)
                     
         self.last_update = self.game_time_now()
     
@@ -269,13 +294,14 @@ class GameContext(ABC):
                 raise TypeError(f"Could not encode {obj} into JSON!")
 
     async def save(self, dir: pathlib.Path) -> None:
+        game_id.set(self.thread_id)
         self.logger.info(f"saving game")
         with open(dir / f"{self.thread_id}.json", "w") as f:
             data: dict[str, Any] = {
                 "init_time": self.init_time,
                 "last_update": self.last_update,
                 "teams": self.teams,
-                "event_log": self.event_log + self.scheduled_events
+                "event_log": list(filter(lambda inst: not inst.was_scheduled, self.event_log))
             }
             json.dump(data, f, default=self.json_encoder)
     
@@ -288,25 +314,28 @@ class GameContext(ABC):
             gctx.teams = [Team.from_dict(team_dict) for team_dict in data["teams"]]
             
             gctx.init_time = data["init_time"]
-            
+
             gctx.thread_id = thread_id
 
-            gctx.loading = True
+            gctx._loading = True
 
             gctx.rng = random.Random(gctx.init_time)
             
             gctx.event_log = []
-            for event_dict in data["event_log"]:
-                inst = EventInstance(event_dict["__type__"], event_dict["__time__"], event_dict["args"], event_dict["kwargs"])
-                if inst.__time__ > data["last_update"]:
-                    gctx.logger.info(f"rescheduling event {inst.__type__}")
-                    gctx.scheduled_events.append(inst)
-                    gctx.scheduled_events.sort(key=lambda e: e.__time__)
-                else:
-                    gctx.last_update = inst.__time__
-                    gctx.actualise_instance(inst)
+            gctx.scheduled_events = [
+                EventInstance(event_dict["__type__"], event_dict["__time__"], event_dict["args"], event_dict["kwargs"])
+                for event_dict in data["event_log"]
+            ]
+
+            gctx.scheduled_events.sort(key=lambda e: e.__time__)
+
+            while len(gctx.scheduled_events) > 0 and data["last_update"] >= gctx.scheduled_events[0].__time__:
+                inst = gctx.scheduled_events.pop(0)
+                gctx.last_update = inst.__time__
+                bound_event: BoundEvent[Self, Any, Any] = getattr(gctx, inst.__type__)
+                bound_event.call_special(inst.was_scheduled, False, *inst.args, **inst.kwargs)
             
-            gctx.loading = False
+            gctx._loading = False
 
             gctx.__reload__(gctx.game_time_now() - data["last_update"])
             
@@ -317,5 +346,5 @@ class GameContext(ABC):
         self.pause_duration += pause_duration
 
     def unpause(self) -> None:
-        self.paused = False
+        self._paused = False
         self.pause_duration += self.game_time_now() - self.last_update

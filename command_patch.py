@@ -27,8 +27,8 @@ class GameCommand[S](SlashCommand):
                 await dctx.respond("No game found in this channel!")
                 return
 
-            
-            gctx = cast(GameContext, gctx)
+            if TYPE_CHECKING:
+                gctx = cast(GameContext, gctx)
             game_id.set(gctx.thread_id)
             await func(dctx, gctx, *args, **kwargs)
 

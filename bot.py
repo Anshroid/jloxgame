@@ -1,12 +1,12 @@
 import logging
 import logging.config
 from .abc import AsyncCallable
-from .state import GameContext, Team
+from .state import GameContext, Team, BoundEvent
 from .command_patch import GameCommand, GameCommandGroup
 
 from typing import Concatenate, Any, cast
 
-from discord import ApplicationCommand, ApplicationContext, AutocompleteContext, Member, Role, TextChannel, Thread, default_permissions, option # pyright: ignore[reportUnknownVariableType]
+from discord import ApplicationCommand, ApplicationContext, AutocompleteContext, Member, OptionChoice, Role, TextChannel, Thread, default_permissions, option # pyright: ignore[reportUnknownVariableType]
 
 import traceback
 import discord
@@ -14,7 +14,6 @@ import pathlib
 import asyncio
 import atexit
 import os
-
 
 class JLOXBot[ContextType: GameContext](discord.Bot):
     def __init__(self, ctx_cls: type[ContextType], save_dir: pathlib.Path, joinable: bool=True, member_creatable: bool=True, logging_enabled: bool=True, *args: Any, **options: Any):
@@ -68,33 +67,36 @@ class JLOXBot[ContextType: GameContext](discord.Bot):
                 try:
                     gctx = self._ctx_cls.load(self.save_dir, game_thread_id)
                 except ValueError:
-                    print(f"[jloxgame | warn] invalid file in save folder (game not loaded): {file}")
+                    self.logger.warning(f"invalid file in save folder (game not loaded): {file}")
                     traceback.print_exc()
                     return
 
                 game_thread = await self.get_or_fetch(Thread, game_thread_id)
 
                 if game_thread is None:
-                    print(f"[jloxgame | warn] could not find thread for game (game not loaded): {game_thread_id}")
+                    self.logger.warning(f"could not find thread for game (game not loaded): {game_thread_id}")
                     return
+
+                gctx.thread = game_thread
 
                 for team in gctx.teams:
                     team.role = await game_thread.guild.get_or_fetch(Role, team.role_id)
                     if team.role is None:
-                        print(f"[jloxgame | warn] could not find all team roles (game not loaded): {game_thread_id}")
+                        self.logger.warning(f"could not find all team roles (game not loaded): {game_thread_id}")
                         return
                     
                     if team.create_thread: 
                         team.thread = await game_thread.guild.get_or_fetch(Thread, team.thread_id)
                         if team.thread is None:
-                            print(f"[jloxgame | warn] could not find all team threads (game not loaded): {game_thread_id}")
+                            self.logger.warning(f"could not find all team threads (game not loaded): {game_thread_id}")
                             return
                 
                 self.games[game_thread_id] = gctx
                 self.team_thread_map.update({team.thread_id: game_thread_id for team in gctx.teams if team.thread})
 
-                for event in gctx.initial_events:
-                    gctx.actualise_instance(event)
+                for inst in gctx.initial_events:
+                    bound_event: BoundEvent[ContextType, Any, Any] = getattr(gctx, inst.__type__)
+                    bound_event.call_special(False, False, *inst.args, **inst.kwargs)
                 gctx.initial_events = []
 
                 self.logger.info(f"loaded game {game_thread_id}")
@@ -189,8 +191,9 @@ class JLOXBot[ContextType: GameContext](discord.Bot):
             self.games[thread.id] = gctx
             self.team_thread_map.update({team.thread_id: thread.id for team in gctx.teams if team.thread})
 
-            for event in gctx.initial_events:
-                gctx.actualise_instance(event)
+            for inst in gctx.initial_events:
+                bound_event: BoundEvent[ContextType, Any, Any] = getattr(gctx, inst.__type__)
+                bound_event.call_special(False, True, *inst.args, **inst.kwargs)
             gctx.initial_events = []
             
             asyncio.gather(gctx.save(self.save_dir), thread.send(f"Created a game in this thread!"))
@@ -216,9 +219,9 @@ class JLOXBot[ContextType: GameContext](discord.Bot):
     async def team_autocomplete(self, ctx: AutocompleteContext):
         bot = cast(JLOXBot[ContextType], ctx.bot)
         gctx = bot.get_game_ctx(ctx)
-        return [] if gctx is None else [team.name for team in gctx.teams]
+        return [] if gctx is None else [OptionChoice(team.name, str(team.role_id)) for team in gctx.teams]
     
-    @option("team", str, autocomplete=team_autocomplete)
+    @option("team", autocomplete=team_autocomplete)
     async def join(self, dctx: ApplicationContext, gctx: ContextType, team: str):
         """Join a team in this thread's game."""
         
@@ -228,7 +231,7 @@ class JLOXBot[ContextType: GameContext](discord.Bot):
             await dctx.respond("You are already in a team!", ephemeral=True)
             return
 
-        _team = next((_team for _team in gctx.teams if _team.name == team), None)
+        _team = next((_team for _team in gctx.teams if _team.role_id == int(team)), None)
 
         if _team is None:
             await dctx.respond("Team not found!", ephemeral=True)
@@ -238,15 +241,15 @@ class JLOXBot[ContextType: GameContext](discord.Bot):
         await dctx.respond("Successfully added you to that team!", ephemeral=True)
     
     @default_permissions(manage_roles=True) # pyright: ignore[reportUntypedFunctionDecorator]
-    @option("team", str, autocomplete=team_autocomplete)
-    async def assign(self, dctx: ApplicationContext, gctx: ContextType, user: Member, team: str):
+    @option("team", int, autocomplete=team_autocomplete)
+    async def assign(self, dctx: ApplicationContext, gctx: ContextType, user: Member, team: int):
         """Assign a player to a team in this thread's game."""
         
         if gctx.get_user_team(user) is not None:
             await dctx.respond("That player is already in a team!", ephemeral=True)
             return
 
-        _team = next((_team for _team in gctx.teams if _team.name == team), None)
+        _team = next((_team for _team in gctx.teams if _team.role_id == team), None)
 
         if _team is None:
             await dctx.respond("Team not found!", ephemeral=True)
@@ -276,6 +279,7 @@ class JLOXBot[ContextType: GameContext](discord.Bot):
     async def start_command(self, dctx: ApplicationContext, gctx: ContextType):
         """Start this thread's game."""
         await gctx.start(dctx)
+        await dctx.respond("Game started!")
 
     async def end(self, dctx: ApplicationContext, gctx: ContextType, delete_threads: bool = True):
         """End this thread's game."""
