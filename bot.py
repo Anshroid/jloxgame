@@ -60,8 +60,8 @@ class JLOXBot[ContextType: GameContext](discord.Bot):
         
         self.scheduler_task = asyncio.get_event_loop().create_task(self.scheduler())
 
-        # @self.listen("on_ready", once=True)
-        # async def _(): await asyncio.create_task(self.backup_poster())
+        @self.listen("on_ready", once=True)
+        async def _(): await asyncio.create_task(self.backup_poster())
     
     async def load_games(self):
         for file in self.save_dir.iterdir():
@@ -295,8 +295,9 @@ class JLOXBot[ContextType: GameContext](discord.Bot):
     
     @default_permissions(manage_roles=True) # pyright: ignore[reportUntypedFunctionDecorator]
     async def reload(self, dctx: ApplicationContext, gctx: ContextType):
-        self.games[gctx.thread_id] = self._ctx_cls.load(self.save_dir, gctx.thread_id)
-        await dctx.respond("Game reloaded successfully!", ephemeral=True)
+        # self.games[gctx.thread_id] = self._ctx_cls.load(self.save_dir, gctx.thread_id)
+        # await dctx.respond("Game reloaded successfully!", ephemeral=True)
+        await dctx.respond("Do not use this command, restart the bot instead!", ephemeral=True)
         
     async def start_command(self, dctx: ApplicationContext, gctx: ContextType):
         """Start this thread's game."""
