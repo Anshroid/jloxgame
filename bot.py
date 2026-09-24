@@ -60,8 +60,8 @@ class JLOXBot[ContextType: GameContext](discord.Bot):
         
         self.scheduler_task = asyncio.get_event_loop().create_task(self.scheduler())
 
-        @self.listen("on_ready", once=True)
-        async def _(): await asyncio.create_task(self.backup_poster())
+        # @self.listen("on_ready", once=True)
+        # async def _(): await asyncio.create_task(self.backup_poster())
     
     async def load_games(self):
         for file in self.save_dir.iterdir():
@@ -70,7 +70,7 @@ class JLOXBot[ContextType: GameContext](discord.Bot):
 
                 try:
                     gctx = self._ctx_cls.load(self.save_dir, game_thread_id)
-                except ValueError:
+                except Exception:
                     self.logger.warning(f"invalid file in save folder (game not loaded): {file}")
                     traceback.print_exc()
                     continue
@@ -188,7 +188,10 @@ class JLOXBot[ContextType: GameContext](discord.Bot):
 
         while True:
             self.logger.info("posting backup")
-            await channel.send(files=[File(self.save_dir / fn) for fn in os.listdir(self.save_dir) if os.path.isfile(self.save_dir / fn)])
+            
+            for gctx in self.games.values():
+                await gctx.save(self.save_dir)
+            await channel.send("new backups:", files=[File(self.save_dir / fn) for fn in os.listdir(self.save_dir) if os.path.isfile(self.save_dir / fn)])
             await asyncio.sleep(120)
 
     # UNIVERSAL GAME COMMANDS
@@ -306,12 +309,14 @@ class JLOXBot[ContextType: GameContext](discord.Bot):
 
     async def end(self, dctx: ApplicationContext, gctx: ContextType, delete_threads: bool = False):
         """End this thread's game."""
-        if gctx.scheduler_task is not None: gctx.scheduler_task.cancel()
+        # if gctx.scheduler_task is not None: gctx.scheduler_task.cancel()
         
-        del self.games[gctx.thread_id]
-        if (file := self.save_dir / f"{dctx.channel_id}.json").exists():
-            file.move(self.save_dir / "archive" / file.name)
+        # del self.games[gctx.thread_id]
+        # if (file := self.save_dir / f"{dctx.channel_id}.json").exists():
+        #     file.move(self.save_dir / "archive" / file.name)
         
-        asyncio.gather(*[team.role.delete() for team in gctx.teams if team.role])
-        if delete_threads:
-            asyncio.gather(*[obj.thread.delete() for obj in gctx.teams + [gctx] if obj.thread])
+        # asyncio.gather(*[team.role.delete() for team in gctx.teams if team.role])
+        # if delete_threads:
+        #     asyncio.gather(*[obj.thread.delete() for obj in gctx.teams + [gctx] if obj.thread])
+        await dctx.respond("Do not use this command, delete roles manually instead!", ephemeral=True)
+

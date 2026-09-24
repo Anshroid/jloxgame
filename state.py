@@ -107,6 +107,7 @@ class BoundEvent[ContextType: GameContext, **Params, ReturnType]:
 
         if self.event.callback and self.do_callback:
             try:
+                asyncio.get_event_loop()
                 if self.event.has_return_type:
                     callback = cast(CallbackWithReturnedVal[ContextType, ReturnType], self.event.callback)
                     asyncio.create_task(callback(gctx, ret))
@@ -114,7 +115,7 @@ class BoundEvent[ContextType: GameContext, **Params, ReturnType]:
                     callback = cast(CallbackWithoutReturnedVal[ContextType], self.event.callback)
                     asyncio.create_task(callback(gctx))
             except RuntimeError:
-                gctx.logger.info("Unable to run callback, no event loop found!")
+                gctx.logger.warning("Unable to run callback, no event loop is running!")
         return ret
     
     def __repr__(self) -> str: return f"<jloxgame.state.BoundEvent object on context {self.gctx} of type {self.event_type()}>"
