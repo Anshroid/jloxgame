@@ -34,19 +34,17 @@ class JLOXBot[ContextType: GameContext](discord.Bot):
         game_group = self.create_group("game")
         discord.guild_only()(game_group.command()(self.create)) # pyright: ignore[reportUnknownMemberType]
         game_group.game_command()(self.configure)
-        game_group.game_command(name="start")(self.start_command)
         game_group.game_command()(self.end)
         game_group.game_command()(self.reload)
 
         if not member_hostable:
             discord.default_permissions(manage_roles=True)(game_group) # pyright: ignore[reportUnknownMemberType]
         
-        self.game_command()(self.configure)
         if joinable:
             self.game_command()(self.join)
             self.game_command()(self.leave)
-        else:
-            self.game_command()(self.assign)
+        
+        self.game_command()(self.assign)
     
         
         if not self.save_dir.exists():
@@ -301,11 +299,6 @@ class JLOXBot[ContextType: GameContext](discord.Bot):
         # self.games[gctx.thread_id] = self._ctx_cls.load(self.save_dir, gctx.thread_id)
         # await dctx.respond("Game reloaded successfully!", ephemeral=True)
         await dctx.respond("Do not use this command, restart the bot instead!", ephemeral=True)
-        
-    async def start_command(self, dctx: ApplicationContext, gctx: ContextType):
-        """Start this thread's game."""
-        await gctx.start(dctx)
-        await dctx.respond("Game started!")
 
     async def end(self, dctx: ApplicationContext, gctx: ContextType, delete_threads: bool = False):
         """End this thread's game."""

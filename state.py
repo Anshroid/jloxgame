@@ -3,15 +3,12 @@ from dataclasses import dataclass
 import logging
 from types import GenericAlias
 from discord import ApplicationContext, Member, Role, Thread
-from enum import Enum
 from typing import Any, Callable, Concatenate, Self, cast, get_args, get_origin, overload
 from inspect import Parameter, Signature, signature, iscoroutinefunction
 import pathlib, json, time, asyncio, random
 
 from jloxgame.abc import AsyncCallable
 from .log_contextvars import GameInjector, game_id
-
-Status = Enum("Status", "INIT SETUP RUNNING END")
 
 ######################################## EVENTS ########################################
 
@@ -41,7 +38,7 @@ class EventInstance:
     kwargs: dict[str, Serializable]
     was_scheduled: bool = False
 
-    def to_dict(self): return {"__type__": self.__type__, "__time__": self.__time__, "args": self.args, "kwargs": self.kwargs}
+    def to_dict(self) -> dict[str, Serializable]: return {"__type__": self.__type__, "__time__": self.__time__, "args": self.args, "kwargs": self.kwargs}
 
 class Event[ContextType: GameContext, **Params, ReturnType]:
     def __init__(
@@ -197,12 +194,7 @@ class GameContext(ABC):
     @abstractmethod
     async def configure(self, dctx: ApplicationContext) -> bool: ...
 
-    @abstractmethod
-    async def start(self, dctx: ApplicationContext) -> None: ...
-
     def __init__(self) -> None:
-        self.status = Status.INIT
-        
         self.thread_id: int = -1
         self.thread: Thread | None = None
 
@@ -285,9 +277,6 @@ class GameContext(ABC):
     
     def json_encoder(self, obj: object) -> Any:
         match obj:
-            case Status():
-                return obj.value
-    
             case EventInstance():
                 return obj.to_dict()
     
