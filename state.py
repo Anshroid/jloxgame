@@ -45,7 +45,7 @@ class Event[ContextType: GameContext, **Params, ReturnType]:
         self, 
         func: EventFunc[ContextType, Params, ReturnType], 
         callback: CallbackWithReturnedVal[ContextType, ReturnType] | CallbackWithoutReturnedVal[ContextType] | None = None
-    ) -> None:
+    ):
         self.func = func
         self.callback = callback
         self.has_return_type = signature(func, eval_str=True).return_annotation != None
@@ -157,8 +157,7 @@ class Team:
     name: str
     colour: int
     
-    create_thread: bool = True
-        
+    team_id: int = -1
     role_id: int = -1
     thread_id: int = -1
 
@@ -183,8 +182,8 @@ class Team:
         return team
     
     def __hash__(self) -> int:
-        assert self.role_id != -1
-        return hash(self.role_id)
+        assert self.team_id != -1
+        return hash(self.team_id)
     
     def __repr__(self) -> str:
         return self.name
@@ -214,34 +213,38 @@ class GameContext(ABC):
         self.rng = random.Random(self.init_time)
         
         self.event_log: list[EventInstance] = []
-        self.initial_events: list[EventInstance] = []
         self.scheduled_events: list[EventInstance] = []
-        self.teams: list[Team] = []
+        self._teams: list[Team] = []
 
         self.threads_roles_created = asyncio.Event()
+    
+    @property
+    def teams(self): return self._teams
+    
+    @teams.setter
+    def teams(self, ts: list[Team]):
+        for i, t in enumerate(ts): t.team_id = i
+        self._teams = ts
     
     def get_user_team(self, user: Member):
         _teams = [team for team in self.teams if team.role in user.roles]
 
         return _teams[0] if len(_teams) == 1 else None
     
-    def get_team(self, id: int):
-        try:
-            return next(team for team in self.teams if team.role_id == id)
-        except StopIteration:
-            raise ValueError(f"Invalid team id provided: {id}")
+    def get_team(self, id: int) -> Team | None:
+        return None if len(self.teams) <= id else self.teams[id]
         
     def game_time_now(self) -> int:
         return self.last_update if self._paused or self._loading else (time.time_ns() // 1000000) - self.init_time - self.pause_duration
     
-    def unix_ms_to_game_time(self, unix_ms: int) -> int: # TODO: Maybe remove these?
-        return unix_ms - self.init_time - self.pause_duration
+    # def unix_ms_to_game_time(self, unix_ms: int) -> int: # TODO: Maybe remove these?
+    #     return unix_ms - self.init_time - self.pause_duration
     
-    def message_id_to_game_time(self, message_id: int) -> int:
-        return self.unix_ms_to_game_time((message_id >> 22) + 1420070400000)
+    # def message_id_to_game_time(self, message_id: int) -> int:
+    #     return self.unix_ms_to_game_time((message_id >> 22) + 1420070400000)
     
-    def game_time_to_unix_ms(self, game_time: int) -> int:
-        return (game_time // 1000000) + self.init_time + self.pause_duration
+    # def game_time_to_unix_ms(self, game_time: int) -> int:
+    #     return (game_time // 1000000) + self.init_time + self.pause_duration
 
     def schedule_event[**Params, ReturnType](self, h: int, m: int, s: int, event: BoundEvent[Self, Params, ReturnType], *args: Params.args, **kwargs: Params.kwargs) -> None:
         """Schedule an event to be added to the event log.
@@ -329,8 +332,9 @@ class GameContext(ABC):
                 bound_event.call_special(inst.was_scheduled, False, *inst.args, **inst.kwargs)
             
             gctx._loading = False
-
-            gctx.__reload__(gctx.game_time_now() - data["last_update"])
+            
+            paused_time = gctx.game_time_now() - data["last_update"]
+            if paused_time > 0: gctx.__reload__(paused_time)
             
             return gctx
 
