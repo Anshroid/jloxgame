@@ -37,7 +37,7 @@ class JLOXBot[ContextType: GameContext](discord.Bot):
         discord.guild_only()(self.game_management_group.command()(self.create)) # pyright: ignore[reportUnknownMemberType]
         self.game_management_group.game_command()(self.configure)
         self.game_management_group.game_command()(self.clean)
-        # self.game_management_group.game_command()(self.reload)
+        self.game_management_group.game_command()(self.reload)
         
         if joinable:
             self.game_command()(self.join)
@@ -201,6 +201,7 @@ class JLOXBot[ContextType: GameContext](discord.Bot):
     
     async def create(self, dctx: ApplicationContext) -> None:
         """Create and set up a new game!"""
+        
         if isinstance(dctx.channel, discord.Thread):
             await dctx.respond("Cannot create a game from a thread!", ephemeral=True)
             return
@@ -245,6 +246,7 @@ class JLOXBot[ContextType: GameContext](discord.Bot):
     
     async def configure(self, dctx: ApplicationContext, gctx: ContextType):
         """Change the configuration of this thread's game."""
+        
         if await gctx.configure(dctx):
             await dctx.respond(f"Configuration changed!", ephemeral=True)
     
@@ -305,6 +307,8 @@ class JLOXBot[ContextType: GameContext](discord.Bot):
     
     @default_permissions(manage_roles=True) # pyright: ignore[reportUntypedFunctionDecorator]
     async def reload(self, dctx: ApplicationContext, gctx: ContextType):
+        """Reload this thread's game from its save file."""
+        
         new_gctx =  await self.load_game(self.save_dir / f"{gctx.thread_id}.json")
         if new_gctx is not None:
             self.games[gctx.thread_id] = new_gctx
@@ -314,6 +318,7 @@ class JLOXBot[ContextType: GameContext](discord.Bot):
 
     async def clean(self, dctx: ApplicationContext, gctx: ContextType, delete_threads: bool = False):
         """Clean up and stop tracking this thread's game."""
+        
         if gctx.scheduler_task is not None: gctx.scheduler_task.cancel()
         
         del self.games[gctx.thread_id]
@@ -327,6 +332,8 @@ class JLOXBot[ContextType: GameContext](discord.Bot):
             await dctx.respond("Game thread successfully cleaned and unlinked!", ephemeral=True)
     
     async def view(self, dctx: ApplicationContext, gctx: ContextType):
+        """Open the referee's Event Log view."""
+        
         i = len(gctx.event_log) - 1
         while gctx.event_log[i].__type__ == "__reload__":
             i -= 1
