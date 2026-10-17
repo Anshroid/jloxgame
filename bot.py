@@ -31,14 +31,14 @@ class JLOXBot[ContextType: GameContext](discord.Bot):
         self.logger = logging.getLogger("jloxgame")
         self.logger.setLevel(logging.DEBUG)
 
-        game_group = self.create_group("game")
-        discord.guild_only()(game_group.command()(self.create)) # pyright: ignore[reportUnknownMemberType]
-        game_group.game_command()(self.configure)
-        game_group.game_command()(self.clean)
-        game_group.game_command()(self.reload)
+        self.game_management_group = self.create_group("game")
+        discord.guild_only()(self.game_management_group.command()(self.create)) # pyright: ignore[reportUnknownMemberType]
+        self.game_management_group.game_command()(self.configure)
+        self.game_management_group.game_command()(self.clean)
+        # self.game_management_group.game_command()(self.reload)
 
         if not member_hostable:
-            discord.default_permissions(manage_roles=True)(game_group) # pyright: ignore[reportUnknownMemberType]
+            discord.default_permissions(manage_roles=True)(self.game_management_group) # pyright: ignore[reportUnknownMemberType]
         
         if joinable:
             self.game_command()(self.join)
@@ -296,11 +296,11 @@ class JLOXBot[ContextType: GameContext](discord.Bot):
         await team.remove_user(dctx.user)
         await dctx.respond("Successfully removed you from your team!", ephemeral=True)
     
-    @default_permissions(manage_roles=True) # pyright: ignore[reportUntypedFunctionDecorator]
-    async def reload(self, dctx: ApplicationContext, gctx: ContextType):
+    # @default_permissions(manage_roles=True) # pyright: ignore[reportUntypedFunctionDecorator]
+    # async def reload(self, dctx: ApplicationContext, gctx: ContextType):
         # self.games[gctx.thread_id] = self._ctx_cls.load(self.save_dir, gctx.thread_id)
         # await dctx.respond("Game reloaded successfully!", ephemeral=True)
-        await dctx.respond("This command needs to be fixed before it can be used!", ephemeral=True) # TODO: FIX
+        # await dctx.respond("This command needs to be fixed before it can be used!", ephemeral=True) # TODO: FIX
 
     async def clean(self, dctx: ApplicationContext, gctx: ContextType, delete_threads: bool = False):
         """Clean up and stop tracking this thread's game."""

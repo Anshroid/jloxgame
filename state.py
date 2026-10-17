@@ -83,8 +83,6 @@ class BoundEvent[ContextType: GameContext, **Params, ReturnType]:
     
     def __call__(self, *args: Params.args, **kwargs: Params.kwargs) -> ReturnType:
         gctx = self.gctx
-        if gctx.thread_id == -1:
-            raise ValueError("Event added before initialisation!")
         
         game_id.set(gctx.thread_id)
         gctx.logger.info(f"processing event {self.event_type()}")
