@@ -48,8 +48,8 @@ class RefereeView[ContextType: GameContext](View):
         self.toggle_btn = Button[Any](label="Disable", emoji="❎", style=ButtonStyle.red)
         self.toggle_btn.callback = self.toggle
         
-        self.add_btn = Button[Any](label="Add New After", emoji="➕", style=ButtonStyle.green)
-        self.add_btn.callback = self.add
+        # self.add_btn = Button[Any](label="Add New After", emoji="➕", style=ButtonStyle.green)
+        # self.add_btn.callback = self.add
         
         self.right_btn = Button[Any](label=">", style=ButtonStyle.blurple)
         self.right_btn.callback = self.right
@@ -64,7 +64,7 @@ class RefereeView[ContextType: GameContext](View):
         self.add_item(self.left_btn)
         self.add_item(self.edit_btn)
         self.add_item(self.toggle_btn)
-        self.add_item(self.add_btn)
+        # self.add_item(self.add_btn)
         self.add_item(self.right_btn)
         
         self.add_item(self.jump_dropdown)
