@@ -1,9 +1,11 @@
 import logging
 import logging.config
 
+
 from .abc import AsyncCallable
 from .state import GameContext, Team
 from .command_patch import GameCommand, GameCommandGroup
+from .referee_view import RefereeView, event_embed
 
 from typing import Concatenate, Any, cast
 
@@ -31,21 +33,23 @@ class JLOXBot[ContextType: GameContext](discord.Bot):
         self.logger = logging.getLogger("jloxgame")
         self.logger.setLevel(logging.DEBUG)
 
-        self.game_management_group = self.create_group("game")
+        self.game_management_group = self.create_group("game", "Commands involving managing games.")
         discord.guild_only()(self.game_management_group.command()(self.create)) # pyright: ignore[reportUnknownMemberType]
         self.game_management_group.game_command()(self.configure)
         self.game_management_group.game_command()(self.clean)
         # self.game_management_group.game_command()(self.reload)
-
-        if not member_hostable:
-            discord.default_permissions(manage_roles=True)(self.game_management_group) # pyright: ignore[reportUnknownMemberType]
         
         if joinable:
             self.game_command()(self.join)
             self.game_command()(self.leave)
-        
         self.game_command()(self.assign)
-    
+        
+        self.referee_group = self.create_group("referee", "Commands involving modifying game state in unrestricted ways.")
+        self.referee_group.game_command()(self.view)
+
+        if not member_hostable:
+            discord.default_permissions(manage_roles=True)(self.game_management_group) # pyright: ignore[reportUnknownMemberType]
+            discord.default_permissions(manage_roles=True)(self.referee_group) # pyright: ignore[reportUnknownMemberType]
         
         if not self.save_dir.exists():
             os.mkdir(self.save_dir)
@@ -66,42 +70,44 @@ class JLOXBot[ContextType: GameContext](discord.Bot):
     async def _load_games(self):
         for file in self.save_dir.iterdir():
             if file.suffix == ".json":
-                game_thread_id = int(file.stem)
-
-                try:
-                    gctx = self._ctx_cls.load(self.save_dir, game_thread_id)
-                except Exception:
-                    self.logger.warning(f"invalid file in save folder (game not loaded): {file}")
-                    traceback.print_exc()
-                    continue
-
-                game_thread = await self.get_or_fetch(Thread, game_thread_id)
-
-                if game_thread is None:
-                    self.logger.warning(f"could not find thread for game (game not loaded): {game_thread_id}")
-                    continue
-
-                gctx.thread = game_thread
+                gctx = await self.load_game(file)
+                if gctx is None: continue
                 
-                fail = False
-                for team in gctx.teams:
-                    team.role = await game_thread.guild.get_or_fetch(Role, team.role_id)
-                    if team.role is None:
-                        self.logger.warning(f"could not find all team roles (game not loaded): {game_thread_id}")
-                        fail = True
-                        break
-                    
-                    team.thread = await game_thread.guild.get_or_fetch(Thread, team.thread_id)
-                    if team.thread is None:
-                        self.logger.warning(f"could not find all team threads (game not loaded): {game_thread_id}")
-                        fail = True
-                        break
+                self.games[gctx.thread_id] = gctx
+                self.team_thread_map.update({team.thread_id: gctx.thread_id for team in gctx.teams if team.thread})
+                self.logger.info(f"loaded game {gctx.thread_id}")
                 
-                if fail: continue
-                
-                self.games[game_thread_id] = gctx
-                self.team_thread_map.update({team.thread_id: game_thread_id for team in gctx.teams if team.thread})
-                self.logger.info(f"loaded game {game_thread_id}")
+    async def load_game(self, file: pathlib.Path) -> ContextType | None:
+        try:
+            gctx = self._ctx_cls.load(file)
+        except Exception:
+            self.logger.warning(f"invalid file in save folder (game not loaded): {file}")
+            traceback.print_exc()
+            return
+
+        game_thread = await self.get_or_fetch(Thread, gctx.thread_id)
+
+        if game_thread is None:
+            self.logger.warning(f"could not find thread for game (game not loaded): {gctx.thread_id}")
+            return
+
+        gctx.thread = game_thread
+        
+        for team in gctx.teams:
+            team.role = await game_thread.guild.get_or_fetch(Role, team.role_id)
+            if team.role is None:
+                self.logger.warning(f"could not find all team roles (game not loaded): {gctx.thread_id}")
+                return
+            
+            team.thread = await game_thread.guild.get_or_fetch(Thread, team.thread_id)
+            if team.thread is None:
+                self.logger.warning(f"could not find all team threads (game not loaded): {gctx.thread_id}")
+                return
+        
+        gctx.file = file
+        
+        return gctx
+        
 
     def command[**Ts](self, **kwargs: Any):
         def decorator(func: AsyncCallable[Concatenate[ApplicationContext, Ts], None]): # pyright: ignore[reportUnknownParameterType]
@@ -140,7 +146,7 @@ class JLOXBot[ContextType: GameContext](discord.Bot):
     def save_on_exit_handler(self):
         self.logger.info("shutting down")
         loop = asyncio.new_event_loop()
-        loop.run_until_complete(asyncio.gather(*(loop.create_task(gctx.save(self.save_dir)) for gctx in self.games.values())))
+        loop.run_until_complete(asyncio.gather(*(loop.create_task(gctx.save()) for gctx in self.games.values())))
         loop.close()
         self.scheduler_task.cancel()
     
@@ -164,7 +170,7 @@ class JLOXBot[ContextType: GameContext](discord.Bot):
                         if channel: await channel.send(traceback.format_exc())
                     
                     if do_save:
-                        await gctx.save(self.save_dir)
+                        await gctx.save()
                 
                 if do_save:
                     t = 0
@@ -187,7 +193,7 @@ class JLOXBot[ContextType: GameContext](discord.Bot):
             self.logger.info("posting backup")
             
             for gctx in self.games.values():
-                await gctx.save(self.save_dir)
+                await gctx.save()
             await channel.send("new backups:", files=[File(self.save_dir / fn) for fn in os.listdir(self.save_dir) if os.path.isfile(self.save_dir / fn)])
             await asyncio.sleep(120)
 
@@ -210,10 +216,11 @@ class JLOXBot[ContextType: GameContext](discord.Bot):
 
             await asyncio.gather(*[self._create_team_role_thread(team, dctx) for team in gctx.teams])
 
+            gctx.file = self.save_dir / f"{gctx.thread_id}.json"
             self.games[thread.id] = gctx
             self.team_thread_map.update({team.thread_id: thread.id for team in gctx.teams if team.thread})
             
-            asyncio.gather(gctx.save(self.save_dir), thread.send(f"Created a game in this thread!"))
+            asyncio.gather(gctx.save(), thread.send(f"Created a game in this thread!"))
         
             self.logger.info(f"created game {gctx.thread_id}")
         
@@ -296,11 +303,14 @@ class JLOXBot[ContextType: GameContext](discord.Bot):
         await team.remove_user(dctx.user)
         await dctx.respond("Successfully removed you from your team!", ephemeral=True)
     
-    # @default_permissions(manage_roles=True) # pyright: ignore[reportUntypedFunctionDecorator]
-    # async def reload(self, dctx: ApplicationContext, gctx: ContextType):
-        # self.games[gctx.thread_id] = self._ctx_cls.load(self.save_dir, gctx.thread_id)
-        # await dctx.respond("Game reloaded successfully!", ephemeral=True)
-        # await dctx.respond("This command needs to be fixed before it can be used!", ephemeral=True) # TODO: FIX
+    @default_permissions(manage_roles=True) # pyright: ignore[reportUntypedFunctionDecorator]
+    async def reload(self, dctx: ApplicationContext, gctx: ContextType):
+        new_gctx =  await self.load_game(self.save_dir / f"{gctx.thread_id}.json")
+        if new_gctx is not None:
+            self.games[gctx.thread_id] = new_gctx
+            await dctx.respond("Game reloaded successfully!", ephemeral=True)
+        else:
+            await dctx.respond("Failed to reload game!", ephemeral=True)
 
     async def clean(self, dctx: ApplicationContext, gctx: ContextType, delete_threads: bool = False):
         """Clean up and stop tracking this thread's game."""
@@ -315,4 +325,10 @@ class JLOXBot[ContextType: GameContext](discord.Bot):
             asyncio.gather(*[obj.thread.delete() for obj in gctx.teams + [gctx] if obj.thread])
         else:
             await dctx.respond("Game thread successfully cleaned and unlinked!", ephemeral=True)
+    
+    async def view(self, dctx: ApplicationContext, gctx: ContextType):
+        i = len(gctx.event_log) - 1
+        while gctx.event_log[i].__type__ == "__reload__":
+            i -= 1
+        await dctx.respond(view=RefereeView(gctx, self, i), embed=event_embed(gctx, i), ephemeral=True)
 

@@ -3,7 +3,7 @@ from dataclasses import dataclass
 import logging
 from types import GenericAlias
 from discord import ApplicationContext, Member, Role, Thread
-from typing import Any, Callable, Concatenate, Self, cast, get_args, get_origin, overload
+from typing import Any, Callable, Concatenate, Self, TypedDict, cast, get_args, get_origin, overload
 from inspect import Parameter, Signature, signature, iscoroutinefunction
 import pathlib, json, time, asyncio, random
 
@@ -37,8 +37,9 @@ class EventInstance:
     args: list[Serializable]
     kwargs: dict[str, Serializable]
     was_scheduled: bool = False
+    __disabled__: bool = False
 
-    def to_dict(self) -> dict[str, Serializable]: return {"__type__": self.__type__, "__time__": self.__time__, "args": self.args, "kwargs": self.kwargs}
+    def to_dict(self) -> dict[str, Serializable]: return {"__type__": self.__type__, "__time__": self.__time__, "args": self.args, "kwargs": self.kwargs, "__disabled__": self.__disabled__}
 
 class Event[ContextType: GameContext, **Params, ReturnType]:
     def __init__(
@@ -186,7 +187,7 @@ class Team:
     def __repr__(self) -> str:
         return self.name
 
-
+SaveFile = TypedDict("SaveFile", {"init_time": int, "last_update": int, "teams": list[Team], "event_log": list[EventInstance]})
 class GameContext(ABC):
     @abstractmethod
     async def configure(self, dctx: ApplicationContext) -> bool: ...
@@ -194,6 +195,8 @@ class GameContext(ABC):
     def __init__(self) -> None:
         self.thread_id: int = -1
         self.thread: Thread | None = None
+        
+        self.file: pathlib.Path | None = None
 
         self._paused = True
         self._loading = False
@@ -234,15 +237,6 @@ class GameContext(ABC):
         
     def game_time_now(self) -> int:
         return self.last_update if self._paused or self._loading else (time.time_ns() // 1000000) - self.init_time - self.pause_duration
-    
-    # def unix_ms_to_game_time(self, unix_ms: int) -> int: # TODO: Maybe remove these?
-    #     return unix_ms - self.init_time - self.pause_duration
-    
-    # def message_id_to_game_time(self, message_id: int) -> int:
-    #     return self.unix_ms_to_game_time((message_id >> 22) + 1420070400000)
-    
-    # def game_time_to_unix_ms(self, game_time: int) -> int:
-    #     return (game_time // 1000000) + self.init_time + self.pause_duration
 
     def schedule_event[**Params, ReturnType](self, h: int, m: int, s: int, event: BoundEvent[Self, Params, ReturnType], *args: Params.args, **kwargs: Params.kwargs) -> None:
         """Schedule an event to be added to the event log.
@@ -287,21 +281,25 @@ class GameContext(ABC):
             case _:
                 raise TypeError(f"Could not encode {obj} into JSON!")
 
-    async def save(self, dir: pathlib.Path) -> None:
-        game_id.set(self.thread_id)
-        self.logger.info(f"saving game")
-        with open(dir / f"{self.thread_id}.json", "w") as f:
-            data: dict[str, Any] = {
-                "init_time": self.init_time,
-                "last_update": self.last_update,
-                "teams": self.teams,
-                "event_log": list(filter(lambda inst: not inst.was_scheduled, self.event_log))
-            }
-            json.dump(data, f, default=self.json_encoder)
+    async def save(self) -> None:
+        if self.file is not None:
+            game_id.set(self.thread_id)
+            self.logger.info(f"saving game")
+            with open(self.file, "w") as f:
+                data: SaveFile = {
+                    "init_time": self.init_time,
+                    "last_update": self.last_update,
+                    "teams": self.teams,
+                    "event_log": [inst for inst in self.event_log if not inst.was_scheduled]
+                }
+                if data["event_log"][-1].__type__ == "__reload__":
+                    data["event_log"].pop()
+                json.dump(data, f, default=self.json_encoder, indent=4)
     
     @classmethod
-    def load(cls, dir: pathlib.Path, thread_id: int) -> Self:
-        with open(dir / f"{thread_id}.json", "r") as f:
+    def load(cls, file: pathlib.Path) -> Self:
+        thread_id = int(file.stem)
+        with open(file, "r") as f:
             data = json.load(f)
             
             gctx = cls()
@@ -317,7 +315,14 @@ class GameContext(ABC):
             
             gctx.event_log = []
             gctx.scheduled_events = [
-                EventInstance(event_dict["__type__"], event_dict["__time__"], event_dict["args"], event_dict["kwargs"])
+                EventInstance(
+                    event_dict["__type__"], 
+                    event_dict["__time__"], 
+                    event_dict["args"], 
+                    event_dict["kwargs"], 
+                    False,
+                    event_dict.get("__disabled__", False)
+                )
                 for event_dict in data["event_log"]
             ]
 
@@ -325,6 +330,10 @@ class GameContext(ABC):
 
             while len(gctx.scheduled_events) > 0 and data["last_update"] >= gctx.scheduled_events[0].__time__:
                 inst = gctx.scheduled_events.pop(0)
+                if inst.__disabled__: 
+                    gctx.logger.info(f"skipping disabled event {inst.__type__}")
+                    gctx.event_log.append(inst)
+                    continue
                 gctx.last_update = inst.__time__
                 bound_event: BoundEvent[Self, Any, Any] = getattr(gctx, inst.__type__)
                 bound_event.call_special(inst.was_scheduled, False, *inst.args, **inst.kwargs)
